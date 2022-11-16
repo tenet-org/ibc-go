@@ -1,7 +1,6 @@
 package v7
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/codec"
@@ -9,34 +8,30 @@ import (
 
 	"github.com/cosmos/ibc-go/v6/modules/core/02-client/types"
 	"github.com/cosmos/ibc-go/v6/modules/core/exported"
-	ibctm "github.com/cosmos/ibc-go/v6/modules/light-clients/07-tendermint"
 )
 
 // MigrateGenesis accepts exported v1.0.0 IBC client genesis file and migrates it to:
 //
 // - Update solo machine client state protobuf definition (v1 to v2)
 // - Remove all solo machine consensus states
-// - Remove all expired tendermint consensus states
-// - Adds ProcessedHeight and Iteration keys for unexpired tendermint consensus states
+// - Remove localhost client
 func MigrateGenesis(cdc codec.BinaryCodec, clientGenState *types.GenesisState, genesisBlockTime time.Time, selfHeight exported.Height) (*types.GenesisState, error) {
-	// To prune the consensus states, we will create new clientsConsensus
-	// and clientsMetadata. These slices will be filled up with consensus states
-	// which should not be pruned. No solo machine consensus states should be added
-	// and only unexpired consensus states for tendermint clients will be added.
-	// The metadata keys for unexpired consensus states will be added to clientsMetadata
+	// To prune the client and consensus states, we will create new slices to fill up
+	// with information we want to keep.
 	var (
 		clientsConsensus []types.ClientConsensusStates
-		clientsMetadata  []types.IdentifiedGenesisMetadata
+		clients          []types.IdentifiedClientState
 	)
 
-	for i, client := range clientGenState.Clients {
+	for _, client := range clientGenState.Clients {
 		clientType, _, err := types.ParseClientIdentifier(client.ClientId)
 		if err != nil {
 			return nil, err
 		}
 
 		// update solo machine client state defintions
-		if clientType == exported.Solomachine {
+		switch clientType {
+		case exported.Solomachine:
 			clientState := &ClientState{}
 			if err := cdc.Unmarshal(client.ClientState.Value, clientState); err != nil {
 				return nil, sdkerrors.Wrap(err, "failed to unmarshal client state bytes into solo machine client state")
@@ -49,10 +44,14 @@ func MigrateGenesis(cdc codec.BinaryCodec, clientGenState *types.GenesisState, g
 				return nil, err
 			}
 
-			clientGenState.Clients[i] = types.IdentifiedClientState{
+			clients = append(clients, types.IdentifiedClientState{
 				ClientId:    client.ClientId,
 				ClientState: any,
-			}
+			})
+		case Localhost:
+			// remove localhost client state by not adding client state
+		default:
+			// add all other client states
 		}
 
 		// iterate consensus states by client
@@ -68,75 +67,15 @@ func MigrateGenesis(cdc codec.BinaryCodec, clientGenState *types.GenesisState, g
 					// remove all consensus states for the solo machine
 					// do not add to new clientsConsensus
 
-				case exported.Tendermint:
-					// only add non expired consensus states to new clientsConsensus
-					tmClientState, ok := client.ClientState.GetCachedValue().(*ibctm.ClientState)
-					if !ok {
-						return nil, types.ErrInvalidClient
-					}
-
-					// collect unexpired consensus states
-					var unexpiredConsensusStates []types.ConsensusStateWithHeight
-					for _, consState := range clientConsensusStates.ConsensusStates {
-						tmConsState := consState.ConsensusState.GetCachedValue().(*ibctm.ConsensusState)
-						if !tmClientState.IsExpired(tmConsState.Timestamp, genesisBlockTime) {
-							unexpiredConsensusStates = append(unexpiredConsensusStates, consState)
-						}
-					}
-
-					// if we found at least one unexpired consensus state, create a clientConsensusState
-					// and add it to clientsConsensus
-					if len(unexpiredConsensusStates) != 0 {
-						clientsConsensus = append(clientsConsensus, types.ClientConsensusStates{
-							ClientId:        client.ClientId,
-							ConsensusStates: unexpiredConsensusStates,
-						})
-					}
-
-					// collect metadata for unexpired consensus states
-					var clientMetadata []types.GenesisMetadata
-
-					// remove all expired tendermint consensus state metadata by adding only
-					// unexpired consensus state metadata
-					for _, consState := range unexpiredConsensusStates {
-						for _, identifiedGenMetadata := range clientGenState.ClientsMetadata {
-							// look for metadata for current client
-							if identifiedGenMetadata.ClientId == client.ClientId {
-
-								// obtain height for consensus state being pruned
-								height := consState.Height
-
-								// iterate through metadata and find metadata for current unexpired height
-								// only unexpired consensus state metadata should be added
-								for _, metadata := range identifiedGenMetadata.ClientMetadata {
-									// the previous version of IBC only contained the processed time metadata
-									// if we find the processed time metadata for an unexpired height, add the
-									// iteration key and processed height keys.
-									if bytes.Equal(metadata.Key, ibctm.ProcessedTimeKey(height)) {
-										clientMetadata = append(clientMetadata, metadata)
-									}
-								}
-
-							}
-						}
-					}
-
-					// if we have metadata for unexipred consensus states, add it to consensusMetadata
-					if len(clientMetadata) != 0 {
-						clientsMetadata = append(clientsMetadata, types.IdentifiedGenesisMetadata{
-							ClientId:       client.ClientId,
-							ClientMetadata: clientMetadata,
-						})
-					}
-
 				default:
-					break
+					// ensure all consensus states added for other client types
+					clientsConsensus = append(clientsConsensus, clientConsensusStates)
 				}
 			}
 		}
 	}
 
+	clientGenState.Clients = clients
 	clientGenState.ClientsConsensus = clientsConsensus
-	clientGenState.ClientsMetadata = clientsMetadata
 	return clientGenState, nil
 }
