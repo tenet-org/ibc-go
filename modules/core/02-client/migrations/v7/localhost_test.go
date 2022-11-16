@@ -63,7 +63,7 @@ func (suite *MigrationsV7TestSuite) TestMigrateToV7() {
 		suite.Run(tc.name, func() {
 			suite.SetupTest() // reset
 
-			clientStore = suite.chainA.GetSimApp().IBCKeeper.ClientKeeper.ClientStore(suite.chainA.GetContext(), v7.Localhost)
+			clientStore = suite.chainA.GetSimApp().IBCKeeper.ClientKeeper.ClientStore(suite.chainA.GetContext(), v7.Localhost+"-0")
 
 			tc.malleate()
 
