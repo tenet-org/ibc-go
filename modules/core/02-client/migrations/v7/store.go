@@ -1,4 +1,4 @@
-package v100
+package v7
 
 import (
 	"fmt"
@@ -18,13 +18,17 @@ import (
 	ibctm "github.com/cosmos/ibc-go/v6/modules/light-clients/07-tendermint"
 )
 
-// MigrateStore performs in-place store migrations from SDK v0.40 of the IBC module to v1.0.0 of ibc-go.
+// Localhost is the client type for a localhost client. It is also used as the clientID
+// for the localhost client.
+const Localhost string = "09-localhost"
+
+// MigrateStore performs in-place store migrations from ibc-go v6 to ibc-go v7.
 // The migration includes:
 //
-// - Migrating solo machine client states from v1 to v2 protobuf definition
+// - Migrating solo machine client states from v2 to v3 protobuf definition.
 // - Pruning all solo machine consensus states
 // - Pruning expired tendermint consensus states
-// - Adds ProcessedHeight and Iteration keys for unexpired tendermint consensus states
+// - Removing the localhost client
 func MigrateStore(ctx sdk.Context, storeKey storetypes.StoreKey, cdc codec.BinaryCodec) (err error) {
 	store := ctx.KVStore(storeKey)
 	iterator := sdk.KVStorePrefixIterator(store, host.KeyClientStorePrefix)
@@ -80,7 +84,7 @@ func MigrateStore(ctx sdk.Context, storeKey storetypes.StoreKey, cdc codec.Binar
 			// update solomachine in store
 			clientStore.Set(host.ClientStateKey(), bz)
 
-			pruneSolomachineConsensusStates(clientStore)
+			pruneClientConsensusStates(clientStore)
 
 		case exported.Tendermint:
 			var clientState exported.ClientState
@@ -93,10 +97,14 @@ func MigrateStore(ctx sdk.Context, storeKey storetypes.StoreKey, cdc codec.Binar
 				return sdkerrors.Wrap(clienttypes.ErrInvalidClient, "client state is not tendermint even though client id contains 07-tendermint")
 			}
 
-			// add iteration keys so pruning will be successful
-			addConsensusMetadata(ctx, clientStore)
-
 			ibctm.PruneAllExpiredConsensusStates(ctx, clientStore, cdc, tmClientState)
+
+		case Localhost:
+			pruneClientConsensusStates(clientStore)
+
+			// delete the client state
+			clientStore.Delete(host.ClientStateKey())
+
 		default:
 			continue
 		}
@@ -105,9 +113,9 @@ func MigrateStore(ctx sdk.Context, storeKey storetypes.StoreKey, cdc codec.Binar
 	return nil
 }
 
-// migrateSolomachine migrates the solomachine from v1 to v2 solo machine protobuf definition.
+// migrateSolomachine migrates the solomachine from v2 to v3 solo machine protobuf definition.
+// Notably it drops the AllowUpdateAfterProposal field.
 func migrateSolomachine(clientState *ClientState) *solomachine.ClientState {
-	isFrozen := clientState.FrozenSequence != 0
 	consensusState := &solomachine.ConsensusState{
 		PublicKey:   clientState.ConsensusState.PublicKey,
 		Diversifier: clientState.ConsensusState.Diversifier,
@@ -116,14 +124,14 @@ func migrateSolomachine(clientState *ClientState) *solomachine.ClientState {
 
 	return &solomachine.ClientState{
 		Sequence:       clientState.Sequence,
-		IsFrozen:       isFrozen,
+		IsFrozen:       clientState.IsFrozen,
 		ConsensusState: consensusState,
 	}
 }
 
-// pruneSolomachineConsensusStates removes all solomachine consensus states from the
-// client store.
-func pruneSolomachineConsensusStates(clientStore sdk.KVStore) {
+// pruneClientConsensusStates removes all client consensus states from the associated
+// client store which is keyed by the clientID.
+func pruneClientConsensusStates(clientStore sdk.KVStore) {
 	iterator := sdk.KVStorePrefixIterator(clientStore, []byte(host.KeyConsensusStatePrefix))
 	var heights []exported.Height
 
@@ -142,31 +150,5 @@ func pruneSolomachineConsensusStates(clientStore sdk.KVStore) {
 	// delete all consensus states
 	for _, height := range heights {
 		clientStore.Delete(host.ConsensusStateKey(height))
-	}
-}
-
-// addConsensusMetadata adds the iteration key and processed height for all tendermint consensus states
-// These keys were not included in the previous release of the IBC module. Adding the iteration keys allows
-// for pruning iteration.
-func addConsensusMetadata(ctx sdk.Context, clientStore sdk.KVStore) {
-	var heights []exported.Height
-	iterator := sdk.KVStorePrefixIterator(clientStore, []byte(host.KeyConsensusStatePrefix))
-
-	defer iterator.Close()
-	for ; iterator.Valid(); iterator.Next() {
-		keySplit := strings.Split(string(iterator.Key()), "/")
-		// consensus key is in the format "consensusStates/<height>"
-		if len(keySplit) != 2 {
-			continue
-		}
-
-		heights = append(heights, clienttypes.MustParseHeight(keySplit[1]))
-	}
-
-	for _, height := range heights {
-		// set the iteration key and processed height
-		// these keys were not included in the SDK v0.42.0 release
-		ibctm.SetProcessedHeight(clientStore, height, clienttypes.GetSelfHeight(ctx))
-		ibctm.SetIterationKey(clientStore, height)
 	}
 }

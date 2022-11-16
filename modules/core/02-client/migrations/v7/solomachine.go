@@ -1,4 +1,4 @@
-package v100
+package v7
 
 import (
 	ics23 "github.com/confio/ics23/go"

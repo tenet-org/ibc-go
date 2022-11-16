@@ -1,4 +1,4 @@
-package v100
+package v7
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 
 	"github.com/cosmos/ibc-go/v6/modules/core/02-client/types"
-	host "github.com/cosmos/ibc-go/v6/modules/core/24-host"
 	"github.com/cosmos/ibc-go/v6/modules/core/exported"
 	ibctm "github.com/cosmos/ibc-go/v6/modules/light-clients/07-tendermint"
 )
@@ -65,6 +64,10 @@ func MigrateGenesis(cdc codec.BinaryCodec, clientGenState *types.GenesisState, g
 					// remove all consensus states for the solo machine
 					// do not add to new clientsConsensus
 
+				case Localhost:
+					// remove all consensus states for the solo machine
+					// do not add to new clientsConsensus
+
 				case exported.Tendermint:
 					// only add non expired consensus states to new clientsConsensus
 					tmClientState, ok := client.ClientState.GetCachedValue().(*ibctm.ClientState)
@@ -110,19 +113,7 @@ func MigrateGenesis(cdc codec.BinaryCodec, clientGenState *types.GenesisState, g
 									// if we find the processed time metadata for an unexpired height, add the
 									// iteration key and processed height keys.
 									if bytes.Equal(metadata.Key, ibctm.ProcessedTimeKey(height)) {
-										clientMetadata = append(clientMetadata,
-											// set the processed height using the current self height
-											// this is safe, it may cause delays in packet processing if there
-											// is a non zero connection delay time
-											types.GenesisMetadata{
-												Key:   ibctm.ProcessedHeightKey(height),
-												Value: []byte(selfHeight.String()),
-											},
-											metadata, // processed time
-											types.GenesisMetadata{
-												Key:   ibctm.IterationKey(height),
-												Value: host.ConsensusStateKey(height),
-											})
+										clientMetadata = append(clientMetadata, metadata)
 									}
 								}
 

@@ -1,12 +1,9 @@
-package v100_test
+package v7_test
 
 import (
-	"testing"
 	"time"
 
-	"github.com/stretchr/testify/suite"
-
-	v100 "github.com/cosmos/ibc-go/v6/modules/core/02-client/legacy/v100"
+	"github.com/cosmos/ibc-go/v6/modules/core/02-client/migrations/v7"
 	"github.com/cosmos/ibc-go/v6/modules/core/02-client/types"
 	host "github.com/cosmos/ibc-go/v6/modules/core/24-host"
 	"github.com/cosmos/ibc-go/v6/modules/core/exported"
@@ -14,35 +11,10 @@ import (
 	ibctesting "github.com/cosmos/ibc-go/v6/testing"
 )
 
-type LegacyTestSuite struct {
-	suite.Suite
-
-	coordinator *ibctesting.Coordinator
-
-	// testing chains used for convenience and readability
-	chainA *ibctesting.TestChain
-	chainB *ibctesting.TestChain
-}
-
-// TestLegacyTestSuite runs all the tests within this package.
-func TestLegacyTestSuite(t *testing.T) {
-	suite.Run(t, new(LegacyTestSuite))
-}
-
-// SetupTest creates a coordinator with 2 test chains.
-func (suite *LegacyTestSuite) SetupTest() {
-	suite.coordinator = ibctesting.NewCoordinator(suite.T(), 2)
-	suite.chainA = suite.coordinator.GetChain(ibctesting.GetChainID(1))
-	suite.chainB = suite.coordinator.GetChain(ibctesting.GetChainID(2))
-	// commit some blocks so that QueryProof returns valid proof (cannot return valid query if height <= 1)
-	suite.coordinator.CommitNBlocks(suite.chainA, 2)
-	suite.coordinator.CommitNBlocks(suite.chainB, 2)
-}
-
 // only test migration for solo machines
 // ensure all client states are migrated and all consensus states
 // are removed
-func (suite *LegacyTestSuite) TestMigrateStoreSolomachine() {
+func (suite *MigrationsV7TestSuite) TestMigrateStoreSolomachine() {
 	path := ibctesting.NewPath(suite.chainA, suite.chainB)
 
 	// create multiple legacy solo machine clients
@@ -54,27 +26,22 @@ func (suite *LegacyTestSuite) TestMigrateStoreSolomachine() {
 	// using client states and consensus states which do not implement the exported.ClientState
 	// and exported.ConsensusState interface
 	for _, sm := range []*ibctesting.Solomachine{solomachine, solomachineMulti} {
-		clientStore := path.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper.ClientStore(path.EndpointA.Chain.GetContext(), sm.ClientID)
+		clientStore := suite.chainA.App.GetIBCKeeper().ClientKeeper.ClientStore(suite.chainA.GetContext(), sm.ClientID)
 		clientState := sm.ClientState()
 
-		var seq uint64
-		if clientState.IsFrozen {
-			seq = 1
-		}
-
 		// generate old client state proto definition
-		legacyClientState := &v100.ClientState{
-			Sequence:       clientState.Sequence,
-			FrozenSequence: seq,
-			ConsensusState: &v100.ConsensusState{
+		legacyClientState := &v7.ClientState{
+			Sequence: clientState.Sequence,
+			ConsensusState: &v7.ConsensusState{
 				PublicKey:   clientState.ConsensusState.PublicKey,
 				Diversifier: clientState.ConsensusState.Diversifier,
 				Timestamp:   clientState.ConsensusState.Timestamp,
 			},
+			AllowUpdateAfterProposal: true,
 		}
 
 		// set client state
-		bz, err := path.EndpointA.Chain.App.AppCodec().MarshalInterface(legacyClientState)
+		bz, err := suite.chainA.App.AppCodec().MarshalInterface(legacyClientState)
 		suite.Require().NoError(err)
 		clientStore.Set(host.ClientStateKey(), bz)
 
@@ -83,7 +50,7 @@ func (suite *LegacyTestSuite) TestMigrateStoreSolomachine() {
 		height2 := types.NewHeight(1, 2)
 		height3 := types.NewHeight(0, 123)
 
-		bz, err = path.EndpointA.Chain.App.AppCodec().MarshalInterface(legacyClientState.ConsensusState)
+		bz, err = suite.chainA.App.AppCodec().MarshalInterface(legacyClientState.ConsensusState)
 		suite.Require().NoError(err)
 		clientStore.Set(host.ConsensusStateKey(height1), bz)
 		clientStore.Set(host.ConsensusStateKey(height2), bz)
@@ -93,19 +60,19 @@ func (suite *LegacyTestSuite) TestMigrateStoreSolomachine() {
 	// create tendermint clients
 	suite.coordinator.SetupClients(path)
 
-	err := v100.MigrateStore(path.EndpointA.Chain.GetContext(), path.EndpointA.Chain.GetSimApp().GetKey(host.StoreKey), path.EndpointA.Chain.App.AppCodec())
+	err := v7.MigrateStore(suite.chainA.GetContext(), suite.chainA.GetSimApp().GetKey(host.StoreKey), suite.chainA.App.AppCodec())
 	suite.Require().NoError(err)
 
 	// verify client state has been migrated
 	for _, sm := range []*ibctesting.Solomachine{solomachine, solomachineMulti} {
-		clientState, ok := path.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper.GetClientState(path.EndpointA.Chain.GetContext(), sm.ClientID)
+		clientState, ok := suite.chainA.App.GetIBCKeeper().ClientKeeper.GetClientState(suite.chainA.GetContext(), sm.ClientID)
 		suite.Require().True(ok)
 		suite.Require().Equal(sm.ClientState(), clientState)
 	}
 
 	// verify consensus states have been removed
 	for _, sm := range []*ibctesting.Solomachine{solomachine, solomachineMulti} {
-		clientConsensusStates := path.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper.GetAllConsensusStates(path.EndpointA.Chain.GetContext())
+		clientConsensusStates := suite.chainA.App.GetIBCKeeper().ClientKeeper.GetAllConsensusStates(suite.chainA.GetContext())
 		for _, client := range clientConsensusStates {
 			// GetAllConsensusStates should not return consensus states for our solo machine clients
 			suite.Require().NotEqual(sm.ClientID, client.ClientId)
@@ -115,7 +82,7 @@ func (suite *LegacyTestSuite) TestMigrateStoreSolomachine() {
 
 // only test migration for tendermint clients
 // ensure all expired consensus states are removed from tendermint client stores
-func (suite *LegacyTestSuite) TestMigrateStoreTendermint() {
+func (suite *MigrationsV7TestSuite) TestMigrateStoreTendermint() {
 	// create path and setup clients
 	path1 := ibctesting.NewPath(suite.chainA, suite.chainB)
 	suite.coordinator.SetupClients(path1)
@@ -138,12 +105,12 @@ func (suite *LegacyTestSuite) TestMigrateStoreTendermint() {
 
 		// double chedck all information is currently stored
 		for _, pruneHeight := range pruneHeights {
-			consState, ok := path.EndpointA.Chain.GetConsensusState(path.EndpointA.ClientID, pruneHeight)
+			consState, ok := suite.chainA.GetConsensusState(path.EndpointA.ClientID, pruneHeight)
 			suite.Require().True(ok)
 			suite.Require().NotNil(consState)
 
-			ctx := path.EndpointA.Chain.GetContext()
-			clientStore := path.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper.ClientStore(ctx, path.EndpointA.ClientID)
+			ctx := suite.chainA.GetContext()
+			clientStore := suite.chainA.App.GetIBCKeeper().ClientKeeper.ClientStore(ctx, path.EndpointA.ClientID)
 
 			processedTime, ok := ibctm.GetProcessedTime(clientStore, pruneHeight)
 			suite.Require().True(ok)
@@ -171,7 +138,7 @@ func (suite *LegacyTestSuite) TestMigrateStoreTendermint() {
 		unexpiredHeights = append(unexpiredHeights, path.EndpointA.GetClientState().GetLatestHeight())
 
 		// remove processed height and iteration keys since these were missing from previous version of ibc module
-		clientStore := path.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper.ClientStore(path.EndpointA.Chain.GetContext(), path.EndpointA.ClientID)
+		clientStore := suite.chainA.App.GetIBCKeeper().ClientKeeper.ClientStore(suite.chainA.GetContext(), path.EndpointA.ClientID)
 		for _, height := range unexpiredHeights {
 			clientStore.Delete(ibctm.ProcessedHeightKey(height))
 			clientStore.Delete(ibctm.IterationKey(height))
@@ -184,16 +151,16 @@ func (suite *LegacyTestSuite) TestMigrateStoreTendermint() {
 	// This will cause the consensus states created before the first time increment
 	// to be expired
 	suite.coordinator.IncrementTimeBy(7 * 24 * time.Hour)
-	err := v100.MigrateStore(path1.EndpointA.Chain.GetContext(), path1.EndpointA.Chain.GetSimApp().GetKey(host.StoreKey), path1.EndpointA.Chain.App.AppCodec())
+	err := v7.MigrateStore(path1.EndpointA.Chain.GetContext(), path1.EndpointA.Chain.GetSimApp().GetKey(host.StoreKey), path1.EndpointA.Chain.App.AppCodec())
 	suite.Require().NoError(err)
 
 	for _, path := range []*ibctesting.Path{path1, path2} {
-		ctx := path.EndpointA.Chain.GetContext()
-		clientStore := path.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper.ClientStore(ctx, path.EndpointA.ClientID)
+		ctx := suite.chainA.GetContext()
+		clientStore := suite.chainA.App.GetIBCKeeper().ClientKeeper.ClientStore(ctx, path.EndpointA.ClientID)
 
 		// ensure everything has been pruned
 		for i, pruneHeight := range pruneHeightMap[path] {
-			consState, ok := path.EndpointA.Chain.GetConsensusState(path.EndpointA.ClientID, pruneHeight)
+			consState, ok := suite.chainA.GetConsensusState(path.EndpointA.ClientID, pruneHeight)
 			suite.Require().False(ok, i)
 			suite.Require().Nil(consState, i)
 
@@ -211,7 +178,7 @@ func (suite *LegacyTestSuite) TestMigrateStoreTendermint() {
 
 		// ensure metadata is set for unexpired consensus state
 		for _, height := range unexpiredHeightMap[path] {
-			consState, ok := path.EndpointA.Chain.GetConsensusState(path.EndpointA.ClientID, height)
+			consState, ok := suite.chainA.GetConsensusState(path.EndpointA.ClientID, height)
 			suite.Require().True(ok)
 			suite.Require().NotNil(consState)
 
@@ -221,7 +188,7 @@ func (suite *LegacyTestSuite) TestMigrateStoreTendermint() {
 
 			processedHeight, ok := ibctm.GetProcessedHeight(clientStore, height)
 			suite.Require().True(ok)
-			suite.Require().Equal(types.GetSelfHeight(path.EndpointA.Chain.GetContext()), processedHeight)
+			suite.Require().Equal(types.GetSelfHeight(suite.chainA.GetContext()), processedHeight)
 
 			consKey := ibctm.GetIterationKey(clientStore, height)
 			suite.Require().Equal(host.ConsensusStateKey(height), consKey)

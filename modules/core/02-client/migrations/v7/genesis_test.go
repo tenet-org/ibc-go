@@ -1,4 +1,4 @@
-package v100_test
+package v7_test
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 
 	ibcclient "github.com/cosmos/ibc-go/v6/modules/core/02-client"
-	v100 "github.com/cosmos/ibc-go/v6/modules/core/02-client/legacy/v100"
+	"github.com/cosmos/ibc-go/v6/modules/core/02-client/migrations/v7"
 	"github.com/cosmos/ibc-go/v6/modules/core/02-client/types"
 	host "github.com/cosmos/ibc-go/v6/modules/core/24-host"
 	"github.com/cosmos/ibc-go/v6/modules/core/exported"
@@ -19,7 +19,7 @@ import (
 	"github.com/cosmos/ibc-go/v6/testing/simapp"
 )
 
-func (suite *LegacyTestSuite) TestMigrateGenesisSolomachine() {
+func (suite *MigrationsV7TestSuite) TestMigrateGenesisSolomachine() {
 	path := ibctesting.NewPath(suite.chainA, suite.chainB)
 	encodingConfig := simapp.MakeTestEncodingConfig()
 	clientCtx := client.Context{}.
@@ -45,20 +45,15 @@ func (suite *LegacyTestSuite) TestMigrateGenesisSolomachine() {
 	for _, sm := range []*ibctesting.Solomachine{solomachine, solomachineMulti} {
 		clientState := sm.ClientState()
 
-		var seq uint64
-		if clientState.IsFrozen {
-			seq = 1
-		}
-
 		// generate old client state proto definition
-		legacyClientState := &v100.ClientState{
-			Sequence:       clientState.Sequence,
-			FrozenSequence: seq,
-			ConsensusState: &v100.ConsensusState{
+		legacyClientState := &v7.ClientState{
+			Sequence: clientState.Sequence,
+			ConsensusState: &v7.ConsensusState{
 				PublicKey:   clientState.ConsensusState.PublicKey,
 				Diversifier: clientState.ConsensusState.Diversifier,
 				Timestamp:   clientState.ConsensusState.Timestamp,
 			},
+			AllowUpdateAfterProposal: true,
 		}
 
 		// set client state
@@ -117,12 +112,12 @@ func (suite *LegacyTestSuite) TestMigrateGenesisSolomachine() {
 
 	// migrate store get expected genesis
 	// store migration and genesis migration should produce identical results
-	err = v100.MigrateStore(path.EndpointA.Chain.GetContext(), path.EndpointA.Chain.GetSimApp().GetKey(host.StoreKey), path.EndpointA.Chain.App.AppCodec())
+	err = v7.MigrateStore(path.EndpointA.Chain.GetContext(), path.EndpointA.Chain.GetSimApp().GetKey(host.StoreKey), path.EndpointA.Chain.App.AppCodec())
 	suite.Require().NoError(err)
 	expectedClientGenState := ibcclient.ExportGenesis(path.EndpointA.Chain.GetContext(), path.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper)
 
 	// NOTE: genesis time isn't updated since we aren't testing for tendermint consensus state pruning
-	migrated, err := v100.MigrateGenesis(codec.NewProtoCodec(clientCtx.InterfaceRegistry), &clientGenState, suite.coordinator.CurrentTime, types.GetSelfHeight(suite.chainA.GetContext()))
+	migrated, err := v7.MigrateGenesis(codec.NewProtoCodec(clientCtx.InterfaceRegistry), &clientGenState, suite.coordinator.CurrentTime, types.GetSelfHeight(suite.chainA.GetContext()))
 	suite.Require().NoError(err)
 
 	// 'ExportGenesis' order metadata keys by processedheight, processedtime for all heights, then it appends all iteration keys
@@ -168,7 +163,7 @@ func (suite *LegacyTestSuite) TestMigrateGenesisSolomachine() {
 	suite.Require().Equal(string(expectedIndentedBz), string(indentedBz))
 }
 
-func (suite *LegacyTestSuite) TestMigrateGenesisTendermint() {
+func (suite *MigrationsV7TestSuite) TestMigrateGenesisTendermint() {
 	// create two paths and setup clients
 	path1 := ibctesting.NewPath(suite.chainA, suite.chainB)
 	path2 := ibctesting.NewPath(suite.chainA, suite.chainB)
@@ -217,11 +212,11 @@ func (suite *LegacyTestSuite) TestMigrateGenesisTendermint() {
 
 	// migrate store get expected genesis
 	// store migration and genesis migration should produce identical results
-	err := v100.MigrateStore(path1.EndpointA.Chain.GetContext(), path1.EndpointA.Chain.GetSimApp().GetKey(host.StoreKey), path1.EndpointA.Chain.App.AppCodec())
+	err := v7.MigrateStore(path1.EndpointA.Chain.GetContext(), path1.EndpointA.Chain.GetSimApp().GetKey(host.StoreKey), path1.EndpointA.Chain.App.AppCodec())
 	suite.Require().NoError(err)
 	expectedClientGenState := ibcclient.ExportGenesis(path1.EndpointA.Chain.GetContext(), path1.EndpointA.Chain.App.GetIBCKeeper().ClientKeeper)
 
-	migrated, err := v100.MigrateGenesis(codec.NewProtoCodec(clientCtx.InterfaceRegistry), &clientGenState, suite.coordinator.CurrentTime, types.GetSelfHeight(suite.chainA.GetContext()))
+	migrated, err := v7.MigrateGenesis(codec.NewProtoCodec(clientCtx.InterfaceRegistry), &clientGenState, suite.coordinator.CurrentTime, types.GetSelfHeight(suite.chainA.GetContext()))
 	suite.Require().NoError(err)
 
 	// 'ExportGenesis' order metadata keys by processedheight, processedtime for all heights, then it appends all iteration keys
