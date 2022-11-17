@@ -52,6 +52,7 @@ func MigrateGenesis(cdc codec.BinaryCodec, clientGenState *types.GenesisState, g
 			// remove localhost client state by not adding client state
 		default:
 			// add all other client states
+			clients = append(clients, client)
 		}
 
 		// iterate consensus states by client
