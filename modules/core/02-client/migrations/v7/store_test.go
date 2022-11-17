@@ -89,6 +89,7 @@ func (suite *MigrationsV7TestSuite) TestMigrateStoreTendermint() {
 
 	path2 := ibctesting.NewPath(suite.chainA, suite.chainB)
 	suite.coordinator.SetupClients(path2)
+
 	pruneHeightMap := make(map[*ibctesting.Path][]exported.Height)
 	unexpiredHeightMap := make(map[*ibctesting.Path][]exported.Height)
 
@@ -132,17 +133,13 @@ func (suite *MigrationsV7TestSuite) TestMigrateStoreTendermint() {
 	for _, path := range []*ibctesting.Path{path1, path2} {
 		// create the consensus state that can be used as trusted height for next update
 		var unexpiredHeights []exported.Height
-		path.EndpointA.UpdateClient()
-		unexpiredHeights = append(unexpiredHeights, path.EndpointA.GetClientState().GetLatestHeight())
-		path.EndpointA.UpdateClient()
+		err := path.EndpointA.UpdateClient()
+		suite.Require().NoError(err)
 		unexpiredHeights = append(unexpiredHeights, path.EndpointA.GetClientState().GetLatestHeight())
 
-		// remove processed height and iteration keys since these were missing from previous version of ibc module
-		clientStore := suite.chainA.App.GetIBCKeeper().ClientKeeper.ClientStore(suite.chainA.GetContext(), path.EndpointA.ClientID)
-		for _, height := range unexpiredHeights {
-			clientStore.Delete(ibctm.ProcessedHeightKey(height))
-			clientStore.Delete(ibctm.IterationKey(height))
-		}
+		err = path.EndpointA.UpdateClient()
+		suite.Require().NoError(err)
+		unexpiredHeights = append(unexpiredHeights, path.EndpointA.GetClientState().GetLatestHeight())
 
 		unexpiredHeightMap[path] = unexpiredHeights
 	}
@@ -188,7 +185,7 @@ func (suite *MigrationsV7TestSuite) TestMigrateStoreTendermint() {
 
 			processedHeight, ok := ibctm.GetProcessedHeight(clientStore, height)
 			suite.Require().True(ok)
-			suite.Require().Equal(types.GetSelfHeight(suite.chainA.GetContext()), processedHeight)
+			suite.Require().NotEqual(types.ZeroHeight(), processedHeight)
 
 			consKey := ibctm.GetIterationKey(clientStore, height)
 			suite.Require().Equal(host.ConsensusStateKey(height), consKey)
