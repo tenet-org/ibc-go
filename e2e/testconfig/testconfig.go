@@ -10,6 +10,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/module/testutil"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
+	govv1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
 	govv1beta1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1beta1"
 	"github.com/strangelove-ventures/ibctest/v6/ibc"
 	tmjson "github.com/tendermint/tendermint/libs/json"
@@ -176,6 +177,12 @@ func newDefaultSimappConfig(cc ChainConfig, name, chainID, denom string) ibc.Cha
 	}
 }
 
+// govFeatureReleases represents the releases the governance module genesis
+// was upgraded from v1beta1 to v1.
+var govGenesisFeatureReleases = testsuite.FeatureReleases{
+	MajorVersion: "v7",
+}
+
 // defaultModifyGenesis will only modify governance params to ensure the voting period and minimum deposit
 // are functional for e2e testing purposes.
 func defaultModifyGenesis() func(ibc.ChainConfig, []byte) ([]byte, error) {
@@ -194,18 +201,24 @@ func defaultModifyGenesis() func(ibc.ChainConfig, []byte) ([]byte, error) {
 		govv1beta1.RegisterInterfaces(cfg.InterfaceRegistry)
 		cdc := codec.NewProtoCodec(cfg.InterfaceRegistry)
 
-		govGenesisState := &govv1beta1.GenesisState{}
-		if err := cdc.UnmarshalJSON(appState[govtypes.ModuleName], govGenesisState); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal genesis bytes into gov genesis state: %w", err)
+		var govGenBz []byte
+
+		// ibc-go v7+ uses a SDK governance module which expects a v1 genesis
+		if govGenesisFeatureReleases.IsSupported(chainConfig.Images[0].Version) {
+			govGenBz, err = createV1GovGenesisBz(chainConfig, cdc, appState[govtypes.ModuleName])
+			if err != nil {
+				return nil, err
+			}
+
+		} else {
+			govGenBz, err = createV1Beta1GovGenesisBz(chainConfig, cdc, appState[govtypes.ModuleName])
+			if err != nil {
+				return nil, err
+			}
 		}
 
-		// set correct minimum deposit using configured denom
-		govGenesisState.DepositParams.MinDeposit = sdk.NewCoins(sdk.NewCoin(chainConfig.Denom, govv1beta1.DefaultMinDepositTokens))
-		govGenesisState.VotingParams.VotingPeriod = testvalues.VotingPeriod
-
-		govGenBz, err := cdc.MarshalJSON(govGenesisState)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal gov genesis state: %w", err)
+			return nil, err
 		}
 
 		appState[govtypes.ModuleName] = govGenBz
@@ -222,4 +235,40 @@ func defaultModifyGenesis() func(ibc.ChainConfig, []byte) ([]byte, error) {
 
 		return bz, nil
 	}
+}
+
+func createV1Beta1GovGenesisBz(chainConfig ibc.ChainConfig, cdc codec.Codec, bz []byte) ([]byte, error) {
+	govGenesisState := &govv1beta1.GenesisState{}
+	if err := cdc.UnmarshalJSON(bz, govGenesisState); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal genesis bytes into gov genesis state: %w", err)
+	}
+
+	// set correct minimum deposit using configured denom
+	govGenesisState.DepositParams.MinDeposit = sdk.NewCoins(sdk.NewCoin(chainConfig.Denom, govv1beta1.DefaultMinDepositTokens))
+	govGenesisState.VotingParams.VotingPeriod = testvalues.VotingPeriod
+
+	govGenBz, err := cdc.MarshalJSON(govGenesisState)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal gov genesis state: %w", err)
+	}
+
+	return govGenBz, nil
+}
+
+func createV1GovGenesisBz(chainConfig ibc.ChainConfig, cdc codec.Codec, bz []byte) ([]byte, error) {
+	govGenesisState := &govv1.GenesisState{}
+	if err := cdc.UnmarshalJSON(bz, govGenesisState); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal genesis bytes into gov genesis state: %w", err)
+	}
+
+	// set correct minimum deposit using configured denom
+	govGenesisState.Params.MinDeposit = sdk.NewCoins(sdk.NewCoin(chainConfig.Denom, govv1beta1.DefaultMinDepositTokens))
+	govGenesisState.Params.VotingPeriod = &testvalues.VotingPeriod
+
+	govGenBz, err := cdc.MarshalJSON(govGenesisState)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal gov genesis state: %w", err)
+	}
+
+	return govGenBz, nil
 }
